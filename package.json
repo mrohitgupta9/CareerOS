@@ -1,0 +1,24 @@
+{
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  },
+  "name": "productionsetup",
+  "version": "1.0.0",
+  "description": "Reusable production-level full-stack project foundation.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0",
+    "playwright-core": "^1.63.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

@@ -1,0 +1,19 @@
+const DATABASE_PERFORMANCE = Object.freeze({
+  DEFAULT_PAGE: 1,
+
+  DEFAULT_LIMIT: 20,
+
+  MAX_LIMIT: 100,
+
+  QUERY_MAX_TIME_MS: 5000,
+
+  SLOW_QUERY_THRESHOLD_MS: 500,
+
+  DEFAULT_SORT: {
+    createdAt: -1,
+  },
+});
+
+module.exports = {
+  DATABASE_PERFORMANCE,
+};

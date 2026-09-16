@@ -1,0 +1,119 @@
+services:
+
+  # =====================================================
+  # Reverse Proxy
+  # =====================================================
+
+  nginx:
+    image: nginx:alpine
+
+    restart: unless-stopped
+
+    ports:
+      - "8080:80"
+
+    volumes:
+      - ./infrastructure/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+      backend:
+        condition: service_healthy
+
+
+  # =====================================================
+  # Frontend
+  # =====================================================
+
+  frontend:
+    image: productionsetup-frontend:step27-final
+
+    restart: unless-stopped
+
+    expose:
+      - "8080"
+
+    read_only: true
+
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx:uid=101,gid=101,mode=0755
+      - /var/run:uid=101,gid=101,mode=0755
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--spider",
+          "-q",
+          "http://127.0.0.1:8080/health"
+        ]
+
+      interval: 30s
+
+      timeout: 5s
+
+      retries: 3
+
+      start_period: 10s
+
+
+  # =====================================================
+  # Backend
+  # =====================================================
+
+  backend:
+    image: productionsetup-backend:step29
+
+    restart: unless-stopped
+
+    expose:
+      - "5000"
+
+    env_file:
+      - ./backend/.env.production
+
+    read_only: true
+
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:5000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+        ]
+
+      interval: 30s
+
+      timeout: 5s
+
+      retries: 3
+
+      start_period: 20s

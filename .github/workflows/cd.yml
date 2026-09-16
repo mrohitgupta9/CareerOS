@@ -1,0 +1,248 @@
+name: CD
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# =====================================================
+# SECURITY
+# =====================================================
+
+permissions:
+  contents: read
+  actions: read
+  packages: write
+
+# =====================================================
+# CONCURRENCY
+# =====================================================
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+
+  # =====================================================
+  # CI RELEASE GATE
+  # =====================================================
+
+  release-gate:
+    name: Verify CI for Tagged Commit
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # -------------------------------------------------
+      # Checkout
+      # -------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------
+      # Wait for CI
+      # -------------------------------------------------
+
+      - name: Wait for successful CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+        run: |
+          set -e
+
+          COMMIT_SHA="${GITHUB_SHA}"
+
+          echo "Checking CI status for:"
+          echo "${COMMIT_SHA}"
+
+          for attempt in {1..30}; do
+
+            echo ""
+            echo "CI check attempt ${attempt}/30"
+
+            RUN_DATA="$(gh run list \
+              --workflow ci.yml \
+              --commit "${COMMIT_SHA}" \
+              --limit 20 \
+              --json databaseId,status,conclusion,headSha)"
+
+            echo "${RUN_DATA}"
+
+            SUCCESS_RUN="$(echo "${RUN_DATA}" | jq -r '
+              .[]
+              | select(
+                  .headSha == "'"${COMMIT_SHA}"'"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                )
+              | .databaseId
+            ' | head -n 1)"
+
+            if [ -n "${SUCCESS_RUN}" ]; then
+              echo ""
+              echo "CI validation successful."
+              echo "CI run ID: ${SUCCESS_RUN}"
+              exit 0
+            fi
+
+            FAILED_RUN="$(echo "${RUN_DATA}" | jq -r '
+              .[]
+              | select(
+                  .headSha == "'"${COMMIT_SHA}"'"
+                  and .status == "completed"
+                  and .conclusion != "success"
+                  and .conclusion != null
+                )
+              | "\(.databaseId):\(.conclusion)"
+            ' | head -n 1)"
+
+            if [ -n "${FAILED_RUN}" ]; then
+              echo ""
+              echo "CI validation failed."
+              echo "CI run: ${FAILED_RUN}"
+              exit 1
+            fi
+
+            if [ "${attempt}" -eq 30 ]; then
+              echo ""
+              echo "Timed out waiting for successful CI."
+              echo "Release blocked."
+              exit 1
+            fi
+
+            echo "CI has not completed successfully yet."
+            echo "Waiting 20 seconds..."
+
+            sleep 20
+
+          done
+
+
+  # =====================================================
+  # BUILD AND PUSH
+  # =====================================================
+
+  build-and-push:
+    name: Build & Push Docker Images
+
+    runs-on: ubuntu-latest
+
+    needs:
+      - release-gate
+
+    steps:
+
+      # -------------------------------------------------
+      # Checkout
+      # -------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------
+      # Docker Buildx
+      # -------------------------------------------------
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # -------------------------------------------------
+      # Login to GHCR
+      # -------------------------------------------------
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+
+      # =================================================
+      # FRONTEND METADATA
+      # =================================================
+
+      - name: Frontend image metadata
+        id: frontend-meta
+        uses: docker/metadata-action@v5
+
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/productionsetup-frontend
+
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-
+            type=raw,value=latest
+
+          flavor: |
+            latest=auto
+
+      # =================================================
+      # FRONTEND BUILD
+      # =================================================
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+
+          push: true
+
+          tags: |
+            ${{ steps.frontend-meta.outputs.tags }}
+
+          labels: |
+            ${{ steps.frontend-meta.outputs.labels }}
+
+          provenance: true
+          sbom: true
+
+
+      # =================================================
+      # BACKEND METADATA
+      # =================================================
+
+      - name: Backend image metadata
+        id: backend-meta
+        uses: docker/metadata-action@v5
+
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/productionsetup-backend
+
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-
+            type=raw,value=latest
+
+          flavor: |
+            latest=auto
+
+      # =================================================
+      # BACKEND BUILD
+      # =================================================
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+
+          push: true
+
+          tags: |
+            ${{ steps.backend-meta.outputs.tags }}
+
+          labels: |
+            ${{ steps.backend-meta.outputs.labels }}
+
+          provenance: true
+          sbom: true
+
+
+          
