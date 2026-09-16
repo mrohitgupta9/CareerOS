@@ -167,9 +167,22 @@ const getRedisStatus = () => ({
     : "disconnected",
 
   ready: redisClient.isReady,
-
   open: redisClient.isOpen,
 });
+
+// =====================================================
+// GET CLIENT
+// =====================================================
+
+const getRedisClient = () => {
+  if (!redisClient.isReady) {
+    throw new Error(
+      "Redis client is not ready"
+    );
+  }
+
+  return redisClient;
+};
 
 // =====================================================
 // EXPORTS
@@ -180,4 +193,5 @@ module.exports = {
   connectRedis,
   disconnectRedis,
   getRedisStatus,
+  getRedisClient,
 };
