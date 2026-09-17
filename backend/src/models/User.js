@@ -96,6 +96,7 @@ userSchema.methods.comparePassword = async function (password) {
 
 /**
  * Return safe user object.
+ *
  * Never expose passwordHash.
  */
 userSchema.methods.toSafeObject = function () {

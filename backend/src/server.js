@@ -3,6 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 const authRoutes = require("./routes/authRoutes");
+const profileRoutes = require("./routes/profileRoutes");
 require("dotenv").config();
 
 // =====================================================
@@ -134,6 +135,7 @@ app.use(cookieParser());
 // Global protection for all API endpoints
 app.use("/api", globalApiLimiter);
 app.use("/api/auth", authRoutes);
+app.use("/api/profile", profileRoutes);
 
 // =====================================================
 // API DOCUMENTATION

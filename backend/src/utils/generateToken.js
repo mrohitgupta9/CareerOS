@@ -1,76 +1,84 @@
 const jwt = require("jsonwebtoken");
-const crypto = require("crypto");
-const appConfig = require("../config/appConfig");
 
 // =====================================================
-// Token Configuration
-// =====================================================
-
-const ACCESS_TOKEN_EXPIRES_IN =
-  process.env.JWT_EXPIRES_IN || "15m";
-
-const REFRESH_TOKEN_EXPIRES_IN =
-  process.env.REFRESH_TOKEN_EXPIRES_IN || "7d";
-
-// =====================================================
-// Generate Access Token
+// ACCESS TOKEN
 // =====================================================
 
 const generateAccessToken = (user) => {
+  if (!user || !user._id) {
+    throw new Error(
+      "User is required to generate access token"
+    );
+  }
+
+  const jwtSecret = process.env.JWT_SECRET;
+
+  const jwtExpiresIn =
+    process.env.JWT_EXPIRES_IN || "15m";
+
+  if (!jwtSecret) {
+    throw new Error(
+      "JWT_SECRET is not defined in environment variables"
+    );
+  }
+
   return jwt.sign(
     {
-      sub: user._id.toString(),
+      userId: user._id.toString(),
       role: user.role,
       type: "access",
     },
-    appConfig.jwtSecret,
+    jwtSecret,
     {
-      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+      expiresIn: jwtExpiresIn,
+      issuer: "careeros-api",
+      audience: "careeros-client",
     }
   );
 };
 
 // =====================================================
-// Generate Refresh Token
+// REFRESH TOKEN
 // =====================================================
 
-const generateRefreshToken = (user, jti) => {
+const generateRefreshToken = (user) => {
+  if (!user || !user._id) {
+    throw new Error(
+      "User is required to generate refresh token"
+    );
+  }
+
+  const jwtSecret = process.env.JWT_SECRET;
+
+  const refreshTokenExpiresIn =
+    process.env.REFRESH_TOKEN_EXPIRES_IN || "7d";
+
+  if (!jwtSecret) {
+    throw new Error(
+      "JWT_SECRET is not defined in environment variables"
+    );
+  }
+
   return jwt.sign(
     {
-      sub: user._id.toString(),
-      jti,
+      userId: user._id.toString(),
+      role: user.role,
       type: "refresh",
     },
-    appConfig.jwtSecret,
+    jwtSecret,
     {
-      expiresIn: REFRESH_TOKEN_EXPIRES_IN,
+      expiresIn: refreshTokenExpiresIn,
+      issuer: "careeros-api",
+      audience: "careeros-client",
     }
   );
 };
 
 // =====================================================
-// Generate Refresh Token ID
-// =====================================================
-
-const generateTokenId = () => {
-  return crypto.randomUUID();
-};
-
-// =====================================================
-// Verify Token
-// =====================================================
-
-const verifyToken = (token) => {
-  return jwt.verify(token, appConfig.jwtSecret);
-};
-
-// =====================================================
-// Exports
+// EXPORTS
 // =====================================================
 
 module.exports = {
   generateAccessToken,
   generateRefreshToken,
-  generateTokenId,
-  verifyToken,
 };

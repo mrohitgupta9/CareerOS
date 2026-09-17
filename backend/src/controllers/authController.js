@@ -1,157 +1,86 @@
-const User = require("../models/User");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const User = require("../models/User");
+const RefreshSession = require("../models/RefreshSession");
+
+const {
+  validateRegisterInput,
+  validateLoginInput,
+} = require("../validators/authValidator");
 
 const {
   generateAccessToken,
   generateRefreshToken,
-  generateTokenId,
-  verifyToken,
 } = require("../utils/generateToken");
 
-const { getRedisClient } = require("../config/redis");
+const {
+  hashToken,
+} = require("../utils/hashToken");
 
 // =====================================================
-// CONFIGURATION
+// CONFIG
 // =====================================================
-
-const REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const REFRESH_TOKEN_COOKIE_NAME =
-  process.env.REFRESH_TOKEN_COOKIE_NAME || "refreshToken";
+  process.env.REFRESH_TOKEN_COOKIE_NAME ||
+  "careeros_refresh_token";
+
+const isProduction =
+  process.env.NODE_ENV === "production";
 
 // =====================================================
-// HELPERS
+// REFRESH COOKIE OPTIONS
 // =====================================================
 
-const normalizeEmail = (email) => {
-  return String(email || "")
-    .trim()
-    .toLowerCase();
-};
+const getRefreshCookieOptions = () => ({
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+  path: "/api/auth",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+});
 
-const validatePassword = (password) => {
-  if (!password || typeof password !== "string") {
-    return "Password is required";
+// =====================================================
+// GET REFRESH TOKEN EXPIRATION
+// =====================================================
+
+const getRefreshTokenExpiry = (refreshToken) => {
+  const decoded = jwt.decode(refreshToken);
+
+  if (!decoded || !decoded.exp) {
+    throw new Error(
+      "Invalid refresh token expiration"
+    );
   }
 
-  if (password.length < 8) {
-    return "Password must be at least 8 characters";
-  }
-
-  if (password.length > 128) {
-    return "Password cannot exceed 128 characters";
-  }
-
-  return null;
-};
-
-const getRefreshCookieOptions = () => {
-  const isProduction =
-    process.env.NODE_ENV === "production";
-
-  return {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? "none" : "lax",
-    path: "/api/auth",
-    maxAge: REFRESH_TOKEN_TTL_SECONDS * 1000,
-  };
-};
-
-const setRefreshCookie = (res, token) => {
-  res.cookie(
-    REFRESH_TOKEN_COOKIE_NAME,
-    token,
-    getRefreshCookieOptions()
-  );
-};
-
-const clearRefreshCookie = (res) => {
-  const options = getRefreshCookieOptions();
-
-  delete options.maxAge;
-
-  res.clearCookie(
-    REFRESH_TOKEN_COOKIE_NAME,
-    options
-  );
-};
-
-const refreshSessionKey = (jti) => {
-  return `auth:refresh:${jti}`;
-};
-
-const getRedis = () => {
-  return getRedisClient();
+  return new Date(decoded.exp * 1000);
 };
 
 // =====================================================
 // REGISTER
+// POST /api/auth/register
 // =====================================================
 
 const register = async (req, res, next) => {
   try {
-    const { name, email, password } = req.body;
+    const validation = validateRegisterInput(req.body);
 
-    const cleanName = String(name || "").trim();
-    const cleanEmail = normalizeEmail(email);
-
-    // ---------------------------------------------------
-    // Validate name
-    // ---------------------------------------------------
-
-    if (!cleanName) {
+    if (!validation.valid) {
       return res.status(400).json({
         success: false,
-        message: "Name is required",
+        message: validation.message,
       });
     }
 
-    if (cleanName.length < 2) {
-      return res.status(400).json({
-        success: false,
-        message: "Name must be at least 2 characters",
-      });
-    }
-
-    if (cleanName.length > 80) {
-      return res.status(400).json({
-        success: false,
-        message: "Name cannot exceed 80 characters",
-      });
-    }
-
-    // ---------------------------------------------------
-    // Validate email
-    // ---------------------------------------------------
-
-    if (!cleanEmail) {
-      return res.status(400).json({
-        success: false,
-        message: "Email is required",
-      });
-    }
-
-    // ---------------------------------------------------
-    // Validate password
-    // ---------------------------------------------------
-
-    const passwordError =
-      validatePassword(password);
-
-    if (passwordError) {
-      return res.status(400).json({
-        success: false,
-        message: passwordError,
-      });
-    }
-
-    // ---------------------------------------------------
-    // Check existing user
-    // ---------------------------------------------------
+    const {
+      name,
+      email,
+      password,
+    } = validation.data;
 
     const existingUser = await User.findOne({
-      email: cleanEmail,
+      email,
     });
 
     if (existingUser) {
@@ -162,76 +91,27 @@ const register = async (req, res, next) => {
       });
     }
 
-    // ---------------------------------------------------
-    // Hash password
-    // ---------------------------------------------------
-
     const passwordHash = await bcrypt.hash(
       password,
       12
     );
 
-    // ---------------------------------------------------
-    // Create user
-    // ---------------------------------------------------
-
     const user = await User.create({
-      name: cleanName,
-      email: cleanEmail,
+      name,
+      email,
       passwordHash,
       role: "user",
       isActive: true,
     });
-
-    // ---------------------------------------------------
-    // Generate tokens
-    // ---------------------------------------------------
-
-    const accessToken =
-      generateAccessToken(user);
-
-    const jti = generateTokenId();
-
-    const refreshToken =
-      generateRefreshToken(user, jti);
-
-    // ---------------------------------------------------
-    // Store refresh session in Redis
-    // ---------------------------------------------------
-
-    const redis = getRedis();
-
-    await redis.set(
-      refreshSessionKey(jti),
-      user._id.toString(),
-      {
-        EX: REFRESH_TOKEN_TTL_SECONDS,
-      }
-    );
-
-    // ---------------------------------------------------
-    // Set refresh cookie
-    // ---------------------------------------------------
-
-    setRefreshCookie(
-      res,
-      refreshToken
-    );
-
-    // ---------------------------------------------------
-    // Response
-    // ---------------------------------------------------
 
     return res.status(201).json({
       success: true,
       message: "Account created successfully",
       data: {
         user: user.toSafeObject(),
-        accessToken,
       },
     });
   } catch (error) {
-    // MongoDB duplicate key
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -246,32 +126,27 @@ const register = async (req, res, next) => {
 
 // =====================================================
 // LOGIN
+// POST /api/auth/login
 // =====================================================
 
 const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const validation = validateLoginInput(req.body);
 
-    const cleanEmail = normalizeEmail(email);
-
-    // ---------------------------------------------------
-    // Validate input
-    // ---------------------------------------------------
-
-    if (!cleanEmail || !password) {
+    if (!validation.valid) {
       return res.status(400).json({
         success: false,
-        message:
-          "Email and password are required",
+        message: validation.message,
       });
     }
 
-    // ---------------------------------------------------
-    // Find user
-    // ---------------------------------------------------
+    const {
+      email,
+      password,
+    } = validation.data;
 
     const user = await User.findOne({
-      email: cleanEmail,
+      email,
     }).select("+passwordHash");
 
     if (!user) {
@@ -281,77 +156,66 @@ const login = async (req, res, next) => {
       });
     }
 
-    // ---------------------------------------------------
-    // Check account status
-    // ---------------------------------------------------
-
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
-        message: "User account is inactive",
+        message: "Your account is inactive",
       });
     }
 
-    // ---------------------------------------------------
-    // Compare password
-    // ---------------------------------------------------
-
-    const passwordValid =
+    const passwordMatches =
       await user.comparePassword(password);
 
-    if (!passwordValid) {
+    if (!passwordMatches) {
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",
       });
     }
 
-    // ---------------------------------------------------
-    // Update last login
-    // ---------------------------------------------------
-
     user.lastLoginAt = new Date();
 
     await user.save();
 
-    // ---------------------------------------------------
-    // Generate tokens
-    // ---------------------------------------------------
+    // -------------------------------------------------
+    // Generate Tokens
+    // -------------------------------------------------
 
     const accessToken =
       generateAccessToken(user);
 
-    const jti = generateTokenId();
-
     const refreshToken =
-      generateRefreshToken(user, jti);
+      generateRefreshToken(user);
 
-    // ---------------------------------------------------
-    // Store refresh session
-    // ---------------------------------------------------
+    // -------------------------------------------------
+    // Store Refresh Token Hash
+    // -------------------------------------------------
 
-    const redis = getRedis();
+    const tokenHash =
+      hashToken(refreshToken);
 
-    await redis.set(
-      refreshSessionKey(jti),
-      user._id.toString(),
-      {
-        EX: REFRESH_TOKEN_TTL_SECONDS,
-      }
+    const expiresAt =
+      getRefreshTokenExpiry(refreshToken);
+
+    await RefreshSession.create({
+      user: user._id,
+      tokenHash,
+      expiresAt,
+    });
+
+    // -------------------------------------------------
+    // Set HttpOnly Cookie
+    // -------------------------------------------------
+
+    res.cookie(
+      REFRESH_TOKEN_COOKIE_NAME,
+      refreshToken,
+      getRefreshCookieOptions()
     );
 
-    // ---------------------------------------------------
-    // Set cookie
-    // ---------------------------------------------------
-
-    setRefreshCookie(
-      res,
-      refreshToken
-    );
-
-    // ---------------------------------------------------
+    // -------------------------------------------------
     // Response
-    // ---------------------------------------------------
+    // -------------------------------------------------
 
     return res.status(200).json({
       success: true,
@@ -367,11 +231,16 @@ const login = async (req, res, next) => {
 };
 
 // =====================================================
-// REFRESH TOKEN
+// REFRESH ACCESS TOKEN
+// POST /api/auth/refresh
 // =====================================================
 
 const refresh = async (req, res, next) => {
   try {
+    // -------------------------------------------------
+    // Get Refresh Token From Cookie
+    // -------------------------------------------------
+
     const refreshToken =
       req.cookies?.[
         REFRESH_TOKEN_COOKIE_NAME
@@ -380,137 +249,41 @@ const refresh = async (req, res, next) => {
     if (!refreshToken) {
       return res.status(401).json({
         success: false,
-        message: "Refresh token is missing",
+        message: "Refresh token required",
       });
     }
 
-    // ---------------------------------------------------
-    // Verify refresh token
-    // ---------------------------------------------------
+    // -------------------------------------------------
+    // Verify JWT
+    // -------------------------------------------------
 
-    const decoded =
-      verifyToken(refreshToken);
+    const jwtSecret = process.env.JWT_SECRET;
 
-    if (
-      decoded.type !== "refresh" ||
-      !decoded.sub ||
-      !decoded.jti
-    ) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid refresh token",
-      });
+    if (!jwtSecret) {
+      return next(
+        new Error(
+          "JWT_SECRET is not defined in environment variables"
+        )
+      );
     }
 
-    // ---------------------------------------------------
-    // Redis session
-    // ---------------------------------------------------
+    let decoded;
 
-    const redis = getRedis();
-
-    const sessionKey =
-      refreshSessionKey(decoded.jti);
-
-    const sessionUserId =
-      await redis.get(sessionKey);
-
-    if (!sessionUserId) {
-      clearRefreshCookie(res);
-
-      return res.status(401).json({
-        success: false,
-        message:
-          "Refresh session expired or revoked",
-      });
-    }
-
-    // ---------------------------------------------------
-    // Verify session ownership
-    // ---------------------------------------------------
-
-    if (sessionUserId !== decoded.sub) {
-      await redis.del(sessionKey);
-
-      clearRefreshCookie(res);
-
-      return res.status(401).json({
-        success: false,
-        message: "Invalid refresh session",
-      });
-    }
-
-    // ---------------------------------------------------
-    // Find user
-    // ---------------------------------------------------
-
-    const user = await User.findById(
-      decoded.sub
-    );
-
-    if (!user || !user.isActive) {
-      await redis.del(sessionKey);
-
-      clearRefreshCookie(res);
-
-      return res.status(401).json({
-        success: false,
-        message: "User account unavailable",
-      });
-    }
-
-    // ---------------------------------------------------
-    // Rotate refresh token
-    // ---------------------------------------------------
-
-    await redis.del(sessionKey);
-
-    const newJti = generateTokenId();
-
-    const newRefreshToken =
-      generateRefreshToken(
-        user,
-        newJti
+    try {
+      decoded = jwt.verify(
+        refreshToken,
+        jwtSecret,
+        {
+          issuer: "careeros-api",
+          audience: "careeros-client",
+        }
+      );
+    } catch (error) {
+      res.clearCookie(
+        REFRESH_TOKEN_COOKIE_NAME,
+        getRefreshCookieOptions()
       );
 
-    await redis.set(
-      refreshSessionKey(newJti),
-      user._id.toString(),
-      {
-        EX: REFRESH_TOKEN_TTL_SECONDS,
-      }
-    );
-
-    const accessToken =
-      generateAccessToken(user);
-
-    // ---------------------------------------------------
-    // Set rotated cookie
-    // ---------------------------------------------------
-
-    setRefreshCookie(
-      res,
-      newRefreshToken
-    );
-
-    // ---------------------------------------------------
-    // Response
-    // ---------------------------------------------------
-
-    return res.status(200).json({
-      success: true,
-      message: "Token refreshed successfully",
-      data: {
-        user: user.toSafeObject(),
-        accessToken,
-      },
-    });
-  } catch (error) {
-    clearRefreshCookie(res);
-
-    if (
-      error.name === "TokenExpiredError" ||
-      error.name === "JsonWebTokenError"
-    ) {
       return res.status(401).json({
         success: false,
         message:
@@ -518,42 +291,171 @@ const refresh = async (req, res, next) => {
       });
     }
 
+    // -------------------------------------------------
+    // Verify Token Type
+    // -------------------------------------------------
+
+    if (
+      decoded.type !== "refresh" ||
+      !decoded.userId
+    ) {
+      res.clearCookie(
+        REFRESH_TOKEN_COOKIE_NAME,
+        getRefreshCookieOptions()
+      );
+
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid or expired refresh token",
+      });
+    }
+
+    // -------------------------------------------------
+    // Find Refresh Session
+    // -------------------------------------------------
+
+    const tokenHash =
+      hashToken(refreshToken);
+
+    const session =
+      await RefreshSession.findOne({
+        user: decoded.userId,
+        tokenHash,
+        revokedAt: null,
+        expiresAt: {
+          $gt: new Date(),
+        },
+      }).select("+tokenHash");
+
+    if (!session) {
+      res.clearCookie(
+        REFRESH_TOKEN_COOKIE_NAME,
+        getRefreshCookieOptions()
+      );
+
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid or expired refresh token",
+      });
+    }
+
+    // -------------------------------------------------
+    // Find User
+    // -------------------------------------------------
+
+    const user = await User.findById(
+      decoded.userId
+    );
+
+    if (!user || !user.isActive) {
+      session.revokedAt = new Date();
+      await session.save();
+
+      res.clearCookie(
+        REFRESH_TOKEN_COOKIE_NAME,
+        getRefreshCookieOptions()
+      );
+
+      return res.status(401).json({
+        success: false,
+        message:
+          "Invalid or expired refresh token",
+      });
+    }
+
+    // -------------------------------------------------
+    // Generate New Token Pair
+    // -------------------------------------------------
+
+    const newAccessToken =
+      generateAccessToken(user);
+
+    const newRefreshToken =
+      generateRefreshToken(user);
+
+    // -------------------------------------------------
+    // Revoke Old Refresh Session
+    // -------------------------------------------------
+
+    session.revokedAt = new Date();
+
+    await session.save();
+
+    // -------------------------------------------------
+    // Store New Refresh Session
+    // -------------------------------------------------
+
+    const newTokenHash =
+      hashToken(newRefreshToken);
+
+    const newExpiresAt =
+      getRefreshTokenExpiry(
+        newRefreshToken
+      );
+
+    await RefreshSession.create({
+      user: user._id,
+      tokenHash: newTokenHash,
+      expiresAt: newExpiresAt,
+    });
+
+    // -------------------------------------------------
+    // Replace Refresh Cookie
+    // -------------------------------------------------
+
+    res.cookie(
+      REFRESH_TOKEN_COOKIE_NAME,
+      newRefreshToken,
+      getRefreshCookieOptions()
+    );
+
+    // -------------------------------------------------
+    // Response
+    // -------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+      message: "Token refreshed successfully",
+      data: {
+        accessToken: newAccessToken,
+      },
+    });
+  } catch (error) {
     next(error);
   }
 };
 
+
 // =====================================================
 // LOGOUT
+// POST /api/auth/logout
 // =====================================================
 
 const logout = async (req, res, next) => {
   try {
     const refreshToken =
-      req.cookies?.[
-        REFRESH_TOKEN_COOKIE_NAME
-      ];
+      req.cookies?.[REFRESH_TOKEN_COOKIE_NAME];
 
     if (refreshToken) {
-      try {
-        const decoded =
-          verifyToken(refreshToken);
+      const tokenHash = hashToken(refreshToken);
 
-        if (decoded?.jti) {
-          const redis = getRedis();
-
-          await redis.del(
-            refreshSessionKey(
-              decoded.jti
-            )
-          );
+      await RefreshSession.findOneAndUpdate(
+        {
+          tokenHash,
+          revokedAt: null,
+        },
+        {
+          revokedAt: new Date(),
         }
-      } catch {
-        // Invalid/expired token.
-        // Cookie will still be cleared.
-      }
+      );
     }
 
-    clearRefreshCookie(res);
+    res.clearCookie(
+      REFRESH_TOKEN_COOKIE_NAME,
+      getRefreshCookieOptions()
+    );
 
     return res.status(200).json({
       success: true,
@@ -565,16 +467,41 @@ const logout = async (req, res, next) => {
 };
 
 // =====================================================
-// CURRENT USER
+// GET CURRENT USER
+// GET /api/auth/me
 // =====================================================
 
-const getMe = async (req, res) => {
-  return res.status(200).json({
-    success: true,
-    data: {
-      user: req.user.toSafeObject(),
-    },
-  });
+const getMe = async (req, res, next) => {
+  try {
+    const user = await User.findById(
+      req.user.userId
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "Your account is inactive",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Authenticated user retrieved successfully",
+      data: {
+        user: user.toSafeObject(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // =====================================================

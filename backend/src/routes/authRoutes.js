@@ -8,17 +8,53 @@ const {
   getMe,
 } = require("../controllers/authController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+} = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Public
-router.post("/register", register);
-router.post("/login", login);
-router.post("/refresh", refresh);
-router.post("/logout", logout);
+// =====================================================
+// PUBLIC ROUTES
+// =====================================================
 
-// Protected
-router.get("/me", protect, getMe);
+// Register
+router.post(
+  "/register",
+  register
+);
+
+// Login
+router.post(
+  "/login",
+  login
+);
+
+// Refresh access token
+router.post(
+  "/refresh",
+  refresh
+);
+
+// Logout
+router.post(
+  "/logout",
+  logout
+);
+
+// =====================================================
+// PROTECTED ROUTES
+// =====================================================
+
+// Current authenticated user
+router.get(
+  "/me",
+  protect,
+  getMe
+);
+
+// =====================================================
+// EXPORT
+// =====================================================
 
 module.exports = router;

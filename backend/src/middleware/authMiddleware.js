@@ -1,74 +1,86 @@
-const User = require("../models/User");
-const { verifyToken } = require("../utils/generateToken");
+const jwt = require("jsonwebtoken");
 
 // =====================================================
-// Protect Authenticated Routes
+// AUTHENTICATION MIDDLEWARE
 // =====================================================
 
-const protect = async (req, res, next) => {
+const protect = (req, res, next) => {
   try {
-    const authorization = req.headers.authorization;
+    // -------------------------------------------------
+    // 1. Get Authorization Header
+    // -------------------------------------------------
 
-    if (
-      !authorization ||
-      !authorization.startsWith("Bearer ")
-    ) {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
       return res.status(401).json({
         success: false,
         message: "Authentication required",
       });
     }
 
-    const token = authorization.split(" ")[1];
+    // -------------------------------------------------
+    // 2. Validate Bearer Token Format
+    // -------------------------------------------------
 
-    if (!token) {
+    const [scheme, token] = authHeader.split(" ");
+
+    if (scheme !== "Bearer" || !token) {
       return res.status(401).json({
         success: false,
-        message: "Access token is missing",
+        message: "Invalid authentication token format",
       });
     }
 
-    const decoded = verifyToken(token);
+    // -------------------------------------------------
+    // 3. Validate JWT Secret
+    // -------------------------------------------------
 
-    if (decoded.type !== "access") {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid access token",
-      });
+    const jwtSecret = process.env.JWT_SECRET;
+
+    if (!jwtSecret) {
+      return next(
+        new Error(
+          "JWT_SECRET is not defined in environment variables"
+        )
+      );
     }
 
-    const user = await User.findById(decoded.sub);
+    // -------------------------------------------------
+    // 4. Verify JWT
+    // -------------------------------------------------
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "User account not found",
-      });
-    }
+    const decoded = jwt.verify(token, jwtSecret, {
+      issuer: "careeros-api",
+      audience: "careeros-client",
+    });
 
-    if (!user.isActive) {
-      return res.status(403).json({
-        success: false,
-        message: "User account is inactive",
-      });
-    }
+    // -------------------------------------------------
+    // 5. Attach Authenticated User Information
+    // -------------------------------------------------
 
-    req.user = user;
+    req.user = {
+      userId: decoded.userId,
+      role: decoded.role,
+    };
+
+    // -------------------------------------------------
+    // 6. Continue to Protected Route
+    // -------------------------------------------------
 
     next();
   } catch (error) {
-    if (error.name === "TokenExpiredError") {
-      return res.status(401).json({
-        success: false,
-        message: "Access token expired",
-        code: "ACCESS_TOKEN_EXPIRED",
-      });
-    }
+    // -------------------------------------------------
+    // JWT Errors
+    // -------------------------------------------------
 
-    if (error.name === "JsonWebTokenError") {
+    if (
+      error.name === "JsonWebTokenError" ||
+      error.name === "TokenExpiredError"
+    ) {
       return res.status(401).json({
         success: false,
-        message: "Invalid access token",
+        message: "Invalid or expired authentication token",
       });
     }
 
@@ -76,33 +88,6 @@ const protect = async (req, res, next) => {
   }
 };
 
-// =====================================================
-// Admin-only Middleware
-// =====================================================
-
-const requireAdmin = (req, res, next) => {
-  if (!req.user) {
-    return res.status(401).json({
-      success: false,
-      message: "Authentication required",
-    });
-  }
-
-  if (req.user.role !== "admin") {
-    return res.status(403).json({
-      success: false,
-      message: "Admin access required",
-    });
-  }
-
-  next();
-};
-
-// =====================================================
-// Exports
-// =====================================================
-
 module.exports = {
   protect,
-  requireAdmin,
 };
